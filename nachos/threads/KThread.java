@@ -168,6 +168,10 @@ public class KThread {
 
 	private void runThread() {
 		begin();
+		//-------------------------test waitUntil
+		if (currentThread != idleThread)
+			ThreadedKernel.alarm.waitUntil(100);
+		//-------------------------test waitUntil
 		target.run();
 		finish();
 	}
@@ -203,7 +207,10 @@ public class KThread {
 		toBeDestroyed = currentThread;
 
 		currentThread.status = statusFinished;
-
+		
+		if (currentThread.joinedThread != null)
+			currentThread.joinedThread.ready();
+		
 		sleep();
 	}
 
@@ -289,9 +296,13 @@ public class KThread {
 		if (this.status == statusFinished)
 			return;
 
+		joinedThread = currentThread;
 		while (this.status != statusFinished) {
-			yield();
+			boolean intStatus = Machine.interrupt().disable();
+			sleep();
+			Machine.interrupt().restore(intStatus);
 		}
+
 	}
 
 	/**
@@ -421,7 +432,9 @@ public class KThread {
 
 		KThread t = new KThread(new PingTest(1)).setName("forked thread");
 		t.fork();
-		t.join();
+		//-------------------------test waitUntil
+//		ThreadedKernel.alarm.waitUntil(700);
+		//-------------------------test waitUntil
 		new PingTest(0).run();
 	}
 
@@ -449,6 +462,7 @@ public class KThread {
 	private String name = "(unnamed thread)";
 	private Runnable target;
 	private TCB tcb;
+	private KThread joinedThread;
 
 	/**
 	 * Unique identifer for this thread. Used to deterministically compare
