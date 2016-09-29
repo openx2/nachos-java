@@ -168,10 +168,10 @@ public class KThread {
 
 	private void runThread() {
 		begin();
-		//-------------------------test waitUntil
-		if (currentThread != idleThread)
-			ThreadedKernel.alarm.waitUntil(100);
-		//-------------------------test waitUntil
+		// -------------------------test waitUntil
+//		if (currentThread != idleThread)
+//			ThreadedKernel.alarm.waitUntil(100);
+		// -------------------------test waitUntil
 		target.run();
 		finish();
 	}
@@ -207,10 +207,10 @@ public class KThread {
 		toBeDestroyed = currentThread;
 
 		currentThread.status = statusFinished;
-		
+
 		if (currentThread.joinedThread != null)
 			currentThread.joinedThread.ready();
-		
+
 		sleep();
 	}
 
@@ -430,12 +430,25 @@ public class KThread {
 	public static void selfTest() {
 		Lib.debug(dbgThread, "Enter KThread.selfTest");
 
-		KThread t = new KThread(new PingTest(1)).setName("forked thread");
+		Communicator c = new Communicator();
+		KThread t = new KThread(new Runnable() {
+			@Override
+			public void run() {
+				for (int i = 0; i < 10; i++)
+					System.out.println(c.listen());
+			}
+		}).setName("forked thread");
 		t.fork();
-		//-------------------------test waitUntil
-//		ThreadedKernel.alarm.waitUntil(700);
-		//-------------------------test waitUntil
-		new PingTest(0).run();
+		// -------------------------test waitUntil
+		ThreadedKernel.alarm.waitUntil(700);
+		// -------------------------test waitUntil
+		new Runnable() {
+			@Override
+			public void run() {
+				for (int i = 0; i < 10; i++)
+					c.speak(i);
+			}
+		}.run();
 	}
 
 	private static final char dbgThread = 't';
