@@ -33,10 +33,11 @@ public class Communicator {
 	 */
 	public void speak(int word) {
 		lock.acquire();
-		while (sendingWord != null)
+		while (listenerCount == 0 || sendingWord != null)
 			nonListener.sleep();
 		sendingWord = word;
 		nonSpeaker.wake();
+		listenerCount--;
 		lock.release();
 	}
 
@@ -49,8 +50,11 @@ public class Communicator {
 	public int listen() {
 		int word;
 		lock.acquire();
-		while (sendingWord == null)
+		while (sendingWord == null){
+			nonListener.wake();
+			listenerCount++;
 			nonSpeaker.sleep();
+		}
 		word = sendingWord;
 		sendingWord = null;
 		nonListener.wake();
@@ -62,4 +66,6 @@ public class Communicator {
 	private Condition2 nonSpeaker;
 	private Condition2 nonListener;
 	private Integer sendingWord;	//正在发送的word
+	
+	private int listenerCount = 0;
 }

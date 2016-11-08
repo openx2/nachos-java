@@ -1,6 +1,8 @@
 package nachos.threads;
 
 import nachos.machine.*;
+import nachos.threads.PriorityScheduler.PriorityQueue;
+import nachos.threads.PriorityScheduler.ThreadState;
 
 /**
  * A KThread is a thread that can be used to execute Nachos kernel code. Nachos
@@ -57,7 +59,7 @@ public class KThread {
 		if (currentThread != null) {
 			tcb = new TCB();
 		} else {
-			readyQueue = ThreadedKernel.scheduler.newThreadQueue(false);
+			readyQueue = ThreadedKernel.scheduler.newThreadQueue(true);
 			readyQueue.acquire(this);
 
 			currentThread = this;
@@ -297,9 +299,18 @@ public class KThread {
 			return;
 
 		joinedThread = currentThread;
+		PriorityQueue pq = null;
 		while (this.status != statusFinished) {
 			boolean intStatus = Machine.interrupt().disable();
+			//在join()时也要进行优先级捐献
+			if (ThreadedKernel.scheduler instanceof PriorityScheduler) {
+				pq = (PriorityQueue) ThreadedKernel.scheduler.newThreadQueue(true);
+				pq.acquire(this); //通知新队列自己是资源获得者
+				pq.waitForAccess(joinedThread); //通知队列让joinedThread进行等待
+			}
 			sleep();
+			if (ThreadedKernel.scheduler instanceof PriorityScheduler)
+				pq.acquire(pq.nextThread()); //通知新队列现在pq中现有的线程是资源获得者
 			Machine.interrupt().restore(intStatus);
 		}
 
@@ -417,6 +428,12 @@ public class KThread {
 		public void run() {
 			for (int i = 0; i < 5; i++) {
 				System.out.println("*** thread " + which + " looped " + i + " times");
+				// -------------------------test PriorityScheduler false
+//				if(which == 1) {
+//					((PriorityScheduler)ThreadedKernel.scheduler).decreasePriority();
+//					System.out.println("The priority of this thread is "+((ThreadState)KThread.currentThread.schedulingState).getPriority());
+//				}
+				// -------------------------test PriorityScheduler false
 				currentThread.yield();
 			}
 		}
@@ -430,25 +447,60 @@ public class KThread {
 	public static void selfTest() {
 		Lib.debug(dbgThread, "Enter KThread.selfTest");
 
-		Communicator c = new Communicator();
-		KThread t = new KThread(new Runnable() {
-			@Override
-			public void run() {
-				for (int i = 0; i < 10; i++)
-					System.out.println(c.listen());
-			}
-		}).setName("forked thread");
+		// -------------------------test Communicator
+//		Communicator c = new Communicator();
+//		KThread t = new KThread(new Runnable() {
+//			@Override
+//			public void run() {
+//				for (int i = 0; i < 10; i++){
+//					System.out.println("listener1:" + c.listen());
+//				}
+//			}
+//		}).setName("listener1 thread");
+//		KThread t1 = new KThread(new Runnable() {
+//			@Override
+//			public void run() {
+//				for (int i = 0; i < 10; i++){
+//					System.out.println("listener2:" + c.listen());
+//				}
+//			}
+//		}).setName("listener2 thread");
+		// -------------------------test Communicator
+		KThread t = new KThread(new PingTest(1)).setName("forked thread");
 		t.fork();
+		// -------------------------test join
+//		t.join();
+		// -------------------------test join
+		// -------------------------test PriorityScheduler false
+//		ThreadState ts = (ThreadState) t.schedulingState;
+//		ts.setPriority(4);
+		// -------------------------test PriorityScheduler false
 		// -------------------------test waitUntil
-		ThreadedKernel.alarm.waitUntil(700);
+//		ThreadedKernel.alarm.waitUntil(700);
 		// -------------------------test waitUntil
-		new Runnable() {
-			@Override
-			public void run() {
-				for (int i = 0; i < 10; i++)
-					c.speak(i);
-			}
-		}.run();
+		// -------------------------test Communicator
+//		t1.fork();
+//		KThread speaker2 = new KThread(new Runnable() {
+//			@Override
+//			public void run() {
+//				for (int i = 0; i < 10; i++){
+//					c.speak(i);
+//					System.out.println("speaker2:"+i);
+//				}
+//			}
+//		}).setName("speaker2 thread");
+//		speaker2.fork();
+//		new Runnable() {
+//			@Override
+//			public void run() {
+//				for (int i = 0; i < 10; i++){
+//					c.speak(i);
+//					System.out.println("speaker1:"+i);
+//				}
+//			}
+//		}.run();
+		// -------------------------test Communicator
+		new PingTest(0).run();
 	}
 
 	private static final char dbgThread = 't';

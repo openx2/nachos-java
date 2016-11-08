@@ -38,10 +38,10 @@ public class Condition2 {
 		conditionLock.release();
 		boolean intStatus = Machine.interrupt().disable();
 		
+		waitQueueEmpty = false;
 		//Adding current thread to kernel waiting queue
 		waitQueue.waitForAccess(KThread.currentThread());
 	    KThread.sleep();
-		waitQueueEmpty = false;
 		
 		Machine.interrupt().restore(intStatus);
 		conditionLock.acquire();
