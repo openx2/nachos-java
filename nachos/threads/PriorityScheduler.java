@@ -117,8 +117,8 @@ public class PriorityScheduler extends Scheduler {
 		KThread t1 = new KThread(r1).setName("T1");
 		KThread t2 = new KThread(r2).setName("T2");
 		boolean status = Machine.interrupt().disable();
-		((PriorityScheduler) ThreadedKernel.scheduler).setPriority(t1, 5);
-		((PriorityScheduler) ThreadedKernel.scheduler).setPriority(t2, 4);
+		ThreadedKernel.scheduler.setPriority(t1, 5);
+		ThreadedKernel.scheduler.setPriority(t2, 4);
 		Machine.interrupt().restore(status);
 		// 认为main线程是T3，开始运行
 		resource.acquire();

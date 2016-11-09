@@ -36,7 +36,7 @@ public class Alarm {
 	public void timerInterrupt() {
 		boolean intStatus = Machine.interrupt().disable();
 
-		while (waitQueue.peek() != null && waitQueue.peek().getWaketime() < Machine.timer().getTime()) {
+		while (!waitQueue.isEmpty() && waitQueue.peek().getWaketime() < Machine.timer().getTime()) {
 			KThread thread = waitQueue.poll().getThread();
 			thread.ready();
 		}
