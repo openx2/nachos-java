@@ -33,7 +33,7 @@ public class Boat {
 		// variable to be accessible by children.
 		bg = b;
 
-		if(adults > 0 && children == 1) {
+		if(adults > 0 && children < 2 && !(adults == 1 && children == 0)) {
 			System.out.println("No solution");
 			return;
 		}
