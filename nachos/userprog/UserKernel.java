@@ -1,6 +1,7 @@
 package nachos.userprog;
 
-import com.sun.xml.internal.bind.v2.runtime.unmarshaller.XsiNilLoader.Array;
+import java.util.HashMap;
+import java.util.LinkedList;
 
 import nachos.machine.*;
 import nachos.threads.*;
@@ -31,7 +32,17 @@ public class UserKernel extends ThreadedKernel {
 				exceptionHandler();
 			}
 		});
+		
 		getShellProgramArgs(args);
+		
+		//将所有物理内存上的页号加入到空闲帧列表中
+		for(int i=0; i<Machine.processor().getNumPhysPages(); i++) {
+			freeFrameList.add(i);
+		}
+		
+		globalFFLLock = new Lock();
+		waitingLock = new Lock();
+		processThreadLock = new Lock();
 	}
 
 	private void getShellProgramArgs(String[] sysArgs) {
@@ -53,7 +64,33 @@ public class UserKernel extends ThreadedKernel {
 		shellProgramArgs = new String[argc];
 		System.arraycopy(args, 0, shellProgramArgs, 0, argc);
 	}
+	
+	public static void manageNewProcess(int pid, KThread thread) {
+		processThreadLock.acquire();
+		pidToThread.put(pid, thread);
+		processThreadLock.release();
+	}
+	
+	public static void removeExitedProcess(int pid) {
+		processThreadLock.acquire();
+		pidToThread.remove(pid);
+		processThreadLock.release();
+	}
+	
+	public static KThread getThreadByPID(int pid) {
+		processThreadLock.acquire();
+		KThread t = pidToThread.get(pid);
+		processThreadLock.release();
+		return t;
+	}
 
+	public static boolean allProcessExited() {
+		processThreadLock.acquire();
+		boolean allProcessExited = pidToThread.isEmpty();
+		processThreadLock.release();
+		return allProcessExited;
+	}
+	
 	/**
 	 * Test the console device.
 	 */
@@ -71,6 +108,9 @@ public class UserKernel extends ThreadedKernel {
 //		} while (c != 'q');
 //
 //		System.out.println("");
+		
+		if (scheduler instanceof LotteryScheduler)
+			LotteryScheduler.selfTest();
 	}
 
 	/**
@@ -135,6 +175,13 @@ public class UserKernel extends ThreadedKernel {
 
 	/** Globally accessible reference to the synchronized console. */
 	public static SynchConsole console;
+	
+	public static LinkedList<Integer> freeFrameList = new LinkedList<>();
+	public static Lock globalFFLLock;
+	public static LinkedList<KThread> waitingBecauseOfPageFault = new LinkedList<>();
+	public static Lock waitingLock;	
+	private static HashMap<Integer, KThread> pidToThread = new HashMap<>();
+	private static Lock processThreadLock;
 
 	// dummy variables to make javac smarter
 	private static Coff dummy1 = null;

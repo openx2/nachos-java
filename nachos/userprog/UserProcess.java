@@ -6,6 +6,8 @@ import nachos.userprog.*;
 
 import java.io.EOFException;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
 
 /**
  * Encapsulates the state of a user process that is not contained in its user
@@ -26,8 +28,9 @@ public class UserProcess {
 	public UserProcess() {
 		int numPhysPages = Machine.processor().getNumPhysPages();
 		pageTable = new TranslationEntry[numPhysPages];
-		for (int i = 0; i < numPhysPages; i++)
-			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+		for (int i = 0; i < numPhysPages; i++) // 一开始所有内存都是不可用的
+			pageTable[i] = new TranslationEntry(i, i, false, false, false, false);
+		gottenFrameList = new LinkedList<>();
 	}
 
 	/**
@@ -55,10 +58,12 @@ public class UserProcess {
 		if (!load(name, args))
 			return false;
 
-		//在进程开始执行前，给它添加到标准输入和标准输出的文件描述符
+		// 在进程开始执行前，给它添加到标准输入和标准输出的文件描述符
 		fileDescriptors.put(0, UserKernel.console.openForReading());
 		fileDescriptors.put(1, UserKernel.console.openForWriting());
-		new UThread(this).setName(name).fork();
+		UThread t = new UThread(this);
+		UserKernel.manageNewProcess(pid, t);
+		t.setName(name).fork();
 
 		return true;
 	}
@@ -145,12 +150,22 @@ public class UserProcess {
 
 		byte[] memory = Machine.processor().getMemory();
 
-		// for now, just assume that virtual addresses equal physical addresses
-		if (vaddr < 0 || vaddr >= memory.length)
+		// // for now, just assume that virtual addresses equal physical
+		// addresses
+		// if (vaddr < 0 || vaddr >= memory.length)
+		// return 0;
+
+		// 将虚拟地址转换为物理地址
+		if (vaddr < 0)
+			return 0;
+		TranslationEntry entry = pageTable[Processor.pageFromAddress(vaddr)];
+		int ppn = entry.ppn; // 根据页号查页表，得到物理页号
+		int paddr = Processor.makeAddress(ppn, Processor.offsetFromAddress(vaddr));
+		if (paddr >= memory.length)
 			return 0;
 
-		int amount = Math.min(length, memory.length - vaddr);
-		System.arraycopy(memory, vaddr, data, offset, amount);
+		int amount = Math.min(length, memory.length - paddr);
+		System.arraycopy(memory, paddr, data, offset, amount);
 
 		return amount;
 	}
@@ -192,12 +207,22 @@ public class UserProcess {
 
 		byte[] memory = Machine.processor().getMemory();
 
-		// for now, just assume that virtual addresses equal physical addresses
-		if (vaddr < 0 || vaddr >= memory.length)
+		// // for now, just assume that virtual addresses equal physical
+		// addresses
+		// if (vaddr < 0 || vaddr >= memory.length)
+		// return 0;
+
+		// 将虚拟地址转换为物理地址
+		if (vaddr < 0)
+			return 0;
+		TranslationEntry entry = pageTable[Processor.pageFromAddress(vaddr)];
+		int ppn = entry.ppn; // 根据页号查页表，得到物理页号
+		int paddr = Processor.makeAddress(ppn, Processor.offsetFromAddress(vaddr));
+		if (paddr >= memory.length)
 			return 0;
 
-		int amount = Math.min(length, memory.length - vaddr);
-		System.arraycopy(data, offset, memory, vaddr, amount);
+		int amount = Math.min(length, memory.length - paddr);
+		System.arraycopy(data, offset, memory, paddr, amount);
 
 		return amount;
 	}
@@ -267,7 +292,7 @@ public class UserProcess {
 		// and finally reserve 1 page for arguments
 		numPages++;
 
-		if (!loadSections())
+		if (!loadSections() || allocatePage(numPages - 1) == -1)
 			return false;
 
 		// store arguments in last page
@@ -288,6 +313,22 @@ public class UserProcess {
 		}
 
 		return true;
+	}
+
+	private int allocatePage(int vpn) {
+		// 从物理内存中得到需要的页号
+		UserKernel.globalFFLLock.acquire();
+		if (UserKernel.freeFrameList.isEmpty()) {
+			UserKernel.globalFFLLock.release();
+			Lib.debug(dbgProcess, "Free Frame List Empty!");
+			return -1;
+		}
+		int page = UserKernel.freeFrameList.removeFirst();
+		UserKernel.globalFFLLock.release();
+		gottenFrameList.add(page);
+		pageTable[vpn].ppn = page; // 设置页表对应条目的物理页号
+		pageTable[vpn].valid = true; // 设置页表对应条目为有效
+		return page;
 	}
 
 	/**
@@ -314,8 +355,21 @@ public class UserProcess {
 			for (int i = 0; i < section.getLength(); i++) {
 				int vpn = section.getFirstVPN() + i;
 
-				// for now, just assume virtual addresses=physical addresses
-				section.loadPage(i, vpn);
+				// // for now, just assume virtual addresses=physical addresses
+				// section.loadPage(i, vpn);
+				// 从物理内存中得到需要的页号
+				UserKernel.globalFFLLock.acquire();
+				if (UserKernel.freeFrameList.isEmpty()) {
+					UserKernel.globalFFLLock.release();
+					Lib.debug(dbgProcess, "Can't get enough pages for section!");
+					return false;
+				}
+				int frame = UserKernel.freeFrameList.removeFirst();
+				UserKernel.globalFFLLock.release();
+				section.loadPage(i, frame); // 将section加载到对应页
+				pageTable[vpn].ppn = frame; // 设置页表对应条目的物理页号
+				pageTable[vpn].valid = true; // 设置页表对应条目为有效
+				pageTable[vpn].readOnly = section.isReadOnly(); // 设置是否只读
 			}
 		}
 
@@ -326,6 +380,40 @@ public class UserProcess {
 	 * Release any resources allocated by <tt>loadSections()</tt>.
 	 */
 	protected void unloadSections() {
+		for (int s = 0; s < coff.getNumSections(); s++) {
+			CoffSection section = coff.getSection(s);
+
+			Lib.debug(dbgProcess, "\treleasing " + section.getName() + " section (" + section.getLength() + " pages)");
+			for (int i = 0; i < section.getLength(); i++) {
+				int vpn = section.getFirstVPN() + i;
+				UserKernel.globalFFLLock.acquire();
+				UserKernel.freeFrameList.add(pageTable[vpn].ppn);
+				UserKernel.globalFFLLock.release();
+			}
+		}
+	}
+
+	private void releasePages() {
+		// 释放所有占有的页
+		UserKernel.globalFFLLock.acquire();
+		for (int vpn : gottenFrameList)
+			UserKernel.freeFrameList.add(pageTable[vpn].ppn);
+		UserKernel.globalFFLLock.release();
+		UserKernel.waitingLock.acquire();
+		for (KThread t : UserKernel.waitingBecauseOfPageFault) // 唤醒所有因内存不足而沉睡的线程
+			t.ready();
+		UserKernel.waitingLock.release();
+	}
+
+	private void closeAllFile() {
+		for (HashMap.Entry<Integer, OpenFile> entry : fileDescriptors.entrySet())
+			entry.getValue().close();
+	}
+
+	// 再次执行之前的指令，处理PageFault时用到
+	private void redoInstruction(Processor processor) {
+		processor.writeRegister(Processor.regNextPC, processor.readRegister(Processor.regPC));
+		processor.advancePC();
 	}
 
 	/**
@@ -350,7 +438,7 @@ public class UserProcess {
 		processor.writeRegister(Processor.regA0, argc);
 		processor.writeRegister(Processor.regA1, argv);
 	}
-	
+
 	public boolean isRootProcess() {
 		return pid == 0;
 	}
@@ -359,66 +447,123 @@ public class UserProcess {
 	 * Handle the halt() system call.
 	 */
 	private int handleHalt() {
-		//如果不是由root进程调用，忽略该请求并立刻返回-1，表示失败
-		if(!isRootProcess())
+		// 如果不是由root进程调用，忽略该请求并立刻返回-1，表示失败
+		if (!isRootProcess())
 			return -1;
-		
+
 		Machine.halt();
 
 		Lib.assertNotReached("Machine.halt() did not halt machine!");
 		return 0;
 	}
-	
+
 	/**
-	 * Handle the exit(int status) system call.
+	 * Handle the exit(int status) system call OR a process exits abnormally.
 	 */
 	private int handleExit(int status) {
-		//暂时的退出实现
-		Machine.halt();
+		Lib.debug(dbgProcess, "Process " + pid + " exits with status " + status);
+		exitStatus = status;
+		closeAllFile();
+		unloadSections();
+		releasePages();
+		UserKernel.removeExitedProcess(pid);
+		if (UserKernel.allProcessExited())
+			Kernel.kernel.terminate();
+		UThread.finish();
 		return 0;
 	}
-	
+
+	/**
+	 * Handle the exec(char *name, int argc, char **argv) system call.
+	 */
+	private int handleExec(int pointOfName, int argc, int pointOfArgv) {
+		if (pointOfName <= 0 || argc < 1 || pointOfArgv <= 0)
+			return -1; // 参数不正确
+		String name = readVirtualMemoryString(pointOfName, ARG_STR_MAX_LENGTH);
+		if (name == null)
+			return -1; // 无法获得文件名
+		String[] argv = new String[argc];
+		byte[] pointOfArgvByte = new byte[4];
+		Lib.assertTrue(readVirtualMemory(pointOfArgv, pointOfArgvByte) == 4);
+		int point = Lib.bytesToInt(pointOfArgvByte, 0);
+		for (int i = 0; i < argc; i++) {
+			argv[i] = readVirtualMemoryString(point, ARG_STR_MAX_LENGTH);
+			if (argv[i] == null) // 无法读取到以null结尾的字符串，说明出了错误
+				return -1;
+			point+=argv[i].length()+1;
+		}
+		UserProcess childProcess = UserProcess.newUserProcess();
+		if (!childProcess.execute(name, argv)) // 未成功执行
+			return -1;
+		childrenId.add(childProcess.pid);
+		return childProcess.pid;
+	}
+
+	/**
+	 * Handle the join(int pid, int *status) system call.
+	 */
+	private int handleJoin(int pid, int pointOfStatus) {
+		if (pointOfStatus <= 0 || !childrenId.contains(pid))
+			return -1;
+		KThread child = UserKernel.getThreadByPID(pid);
+		child.join();
+		int status = ((UThread) child).process.exitStatus;
+		Lib.assertTrue(writeVirtualMemory(pointOfStatus, Lib.bytesFromInt(status)) == 4);
+		return status == 0 ? 1 : 0; // 如果子进程正常退出，返回1，否则返回0
+	}
+
 	/**
 	 * Handle the creat(char *name) system call.
 	 */
 	private int handleCreat(int pointOfName) {
-		if (pointOfName <= 0) return -1; //指针指向的位置不合法
-		String name = readVirtualMemoryString(pointOfName, argStrMaxLength);
-		if(name == null) return -1; //无法获得文件名
+		if (pointOfName <= 0)
+			return -1; // 指针指向的位置不合法
+		String name = readVirtualMemoryString(pointOfName, ARG_STR_MAX_LENGTH);
+		if (name == null)
+			return -1; // 无法获得文件名
 		OpenFile f = UserKernel.fileSystem.open(name, true);
-		if(f == null) return -1; //无法打开文件
+		if (f == null)
+			return -1; // 无法打开文件
 		int fd = openCount++;
-		if(fileDescriptors.put(fd, f) == null)
+		if (fileDescriptors.containsKey(fd)) // 已经存在该文件描述符
 			return -1;
+		fileDescriptors.put(fd, f);
 		return fd;
 	}
-	
+
 	/**
 	 * Handle the open(char *name) system call.
 	 */
 	private int handleOpen(int pointOfName) {
-		if (pointOfName <= 0) return -1; //指针指向的位置不合法
-		String name = readVirtualMemoryString(pointOfName, argStrMaxLength);
-		if(name == null) return -1; //无法获得文件名
+		if (pointOfName <= 0)
+			return -1; // 指针指向的位置不合法
+		String name = readVirtualMemoryString(pointOfName, ARG_STR_MAX_LENGTH);
+		if (name == null)
+			return -1; // 无法获得文件名
 		OpenFile f = UserKernel.fileSystem.open(name, false);
-		if(f == null) return -1; //无法打开文件
+		if (f == null)
+			return -1; // 无法打开文件
 		int fd = openCount++;
-		if(fileDescriptors.put(fd, f) == null)
+		if (fileDescriptors.containsKey(fd)) // 已经存在该文件描述符
 			return -1;
+		fileDescriptors.put(fd, f);
 		return fd;
 	}
-	
+
 	/**
 	 * Handle the read(int fd, char *buffer, int size) system call.
 	 */
 	private int handleRead(int fd, int pointOfBuffer, int size) {
-		if (fd < 0 || pointOfBuffer <=0 || size < 0) return -1; //参数不合法
+		if (fd < 0 || pointOfBuffer <= 0 || size < 0)
+			return -1; // 参数不合法
 		OpenFile f = fileDescriptors.get(fd);
-		if(f == null) return -1; //没有打开文件描述符所述的文件
+		if (f == null)
+			return -1; // 没有打开文件描述符所述的文件
 		byte[] buf = new byte[size];
-		int amount = f.read(buf, 0, size); //将读取到的内容从buf的0位置开始放
-		if(amount == -1) return -1;
-		Lib.assertTrue(writeVirtualMemory(pointOfBuffer, buf, 0, amount) == amount); //将buf中的有效内容写入到指针所指向的内存中
+		int amount = f.read(buf, 0, size); // 将读取到的内容从buf的0位置开始放
+		if (amount == -1)
+			return -1;
+		Lib.assertTrue(writeVirtualMemory(pointOfBuffer, buf, 0, amount) == amount); // 将buf中的有效内容写入到指针所指向的内存中
 		return amount;
 	}
 
@@ -426,40 +571,46 @@ public class UserProcess {
 	 * Handle the write(int fd, char *buffer, int size) system call.
 	 */
 	private int handleWrite(int fd, int pointOfBuffer, int size) {
-		if (fd < 0 || pointOfBuffer <=0 || size < 0) return -1; //参数不合法
+		if (fd < 0 || pointOfBuffer <= 0 || size < 0)
+			return -1; // 参数不合法
 		OpenFile f = fileDescriptors.get(fd);
-		if(f == null) return -1; //没有打开文件描述符所述的文件
+		if (f == null)
+			return -1; // 没有打开文件描述符所述的文件
 		byte[] buf = new byte[size];
-		Lib.assertTrue(readVirtualMemory(pointOfBuffer, buf) == size); //从指针所指向的位置读取到size个字节
+		Lib.assertTrue(readVirtualMemory(pointOfBuffer, buf) == size); // 从指针所指向的位置读取到size个字节
 		int amount = f.write(buf, 0, size);
-		if (amount != size) //如果没有写入指定的字节数，说明发生了错误
+		if (amount != size) // 如果没有写入指定的字节数，说明发生了错误
 			return -1;
 		return amount;
 	}
-	
+
 	/**
 	 * Handle the close(int fd) system call.
 	 */
 	private int handleClose(int fd) {
-		if (fd < 0) return -1; //文件描述符不合法
+		if (fd < 0)
+			return -1; // 文件描述符不合法
 		OpenFile f = fileDescriptors.remove(fd);
-		if(f == null) return -1; //没有打开文件描述符所述的文件
+		if (f == null)
+			return -1; // 没有打开文件描述符所述的文件
 		f.close();
 		return 0;
 	}
-	
+
 	/**
 	 * Handle the unlink(char *name) system call.
 	 */
 	private int handleUnlink(int pointOfName) {
-		if (pointOfName <= 0) return -1; //指针指向的位置不合法
-		String name = readVirtualMemoryString(pointOfName, argStrMaxLength);
-		if(name == null) return -1; //无法获得文件名
-		if(!UserKernel.fileSystem.remove(name)) //删除文件失败，则返回-1
+		if (pointOfName <= 0)
+			return -1; // 指针指向的位置不合法
+		String name = readVirtualMemoryString(pointOfName, ARG_STR_MAX_LENGTH);
+		if (name == null)
+			return -1; // 无法获得文件名
+		if (!UserKernel.fileSystem.remove(name)) // 删除文件失败，则返回-1
 			return -1;
 		return 0;
 	}
-	
+
 	private static final int syscallHalt = 0, syscallExit = 1, syscallExec = 2, syscallJoin = 3, syscallCreate = 4,
 			syscallOpen = 5, syscallRead = 6, syscallWrite = 7, syscallClose = 8, syscallUnlink = 9;
 
@@ -535,6 +686,10 @@ public class UserProcess {
 			return handleHalt();
 		case syscallExit:
 			return handleExit(a0);
+		case syscallExec:
+			return handleExec(a0, a1, a2);
+		case syscallJoin:
+			return handleJoin(a0, a1);
 		case syscallCreate:
 			return handleCreat(a0);
 		case syscallOpen:
@@ -575,9 +730,24 @@ public class UserProcess {
 			processor.writeRegister(Processor.regV0, result);
 			processor.advancePC();
 			break;
+		case Processor.exceptionPageFault:
+			int vpn = Processor.pageFromAddress(processor.readRegister(Processor.regBadVAddr));
+			while (allocatePage(vpn) == -1) {
+				Lib.debug(dbgProcess, "Process " + pid + " is suspended because there are no free pages.");
+				UserKernel.waitingLock.acquire();
+				UserKernel.waitingBecauseOfPageFault.add(UThread.currentThread());
+				UserKernel.waitingLock.release();
+				UThread.sleep();
+			}
+			redoInstruction(processor);
+			break;
+		case Processor.exceptionTLBMiss:
+		case Processor.exceptionReadOnly:
+		case Processor.exceptionBusError:
+		case Processor.exceptionAddressError:
+		case Processor.exceptionOverflow:
 		case Processor.exceptionIllegalInstruction:
-			unloadSections(); //释放资源
-			KThread.finish(); //停止当前线程
+			handleExit(cause); // 停止当前线程
 			break;
 
 		default:
@@ -600,18 +770,26 @@ public class UserProcess {
 	private int initialPC, initialSP;
 	private int argc, argv;
 
+	private HashSet<Integer> childrenId = new HashSet<>();
+	private int exitStatus;
+
 	/** Every process has a process id. */
-	private int pid = numCreated++;
+	private final int pid = numCreated++;
 	/** Number of times the UserProcess constructor was called. */
 	private static int numCreated = 0;
-	
-	/** The maximum length of for strings passed as arguments to system calls is 256 bytes. */
-	private static int argStrMaxLength = 256;
-	
-	/** The file numbers of which has opened. Only increment.*/
+
+	/**
+	 * The maximum length of for strings passed as arguments to system calls is
+	 * 256 bytes.
+	 */
+	private static final int ARG_STR_MAX_LENGTH = 256;
+
+	/** The file numbers of which has opened. Only increment. */
 	private int openCount = 2;
 	private HashMap<Integer, OpenFile> fileDescriptors = new HashMap<>();
-	
+
+	private LinkedList<Integer> gottenFrameList;
+
 	private static final int pageSize = Processor.pageSize;
 	private static final char dbgProcess = 'a';
 }

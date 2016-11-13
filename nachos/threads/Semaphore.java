@@ -73,7 +73,7 @@ public class Semaphore {
 	}
 	
 	public void run() {
-	    for (int i=0; i<10; i++) {
+	    for (int i=0; i<3; i++) {
 		ping.P();
 		pong.V();
 	    }
@@ -92,7 +92,7 @@ public class Semaphore {
 
 	new KThread(new PingTest(ping, pong)).setName("ping").fork();
 
-	for (int i=0; i<10; i++) {
+	for (int i=0; i<3; i++) {
 	    ping.V();
 	    pong.P();
 	}

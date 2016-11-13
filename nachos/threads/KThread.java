@@ -299,12 +299,12 @@ public class KThread {
 			return;
 
 		joinedThread = currentThread;
-		PriorityQueue pq = null;
+		ThreadQueue pq = null;
 		while (this.status != statusFinished) {
 			boolean intStatus = Machine.interrupt().disable();
 			//在join()时也要进行优先级捐献
 			if (ThreadedKernel.scheduler instanceof PriorityScheduler) {
-				pq = (PriorityQueue) ThreadedKernel.scheduler.newThreadQueue(true);
+				pq = ThreadedKernel.scheduler.newThreadQueue(true);
 				pq.acquire(this); //通知新队列自己是资源获得者
 				pq.waitForAccess(joinedThread); //通知队列让joinedThread进行等待
 			}

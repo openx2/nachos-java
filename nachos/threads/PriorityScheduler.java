@@ -1,10 +1,8 @@
 package nachos.threads;
 
 import nachos.machine.*;
-import nachos.threads.PriorityScheduler.ThreadState;
 
 import java.util.LinkedList;
-import java.util.HashSet;
 
 /**
  * A scheduler that chooses threads based on their priorities.
@@ -118,7 +116,7 @@ public class PriorityScheduler extends Scheduler {
 		KThread t2 = new KThread(r2).setName("T2");
 		boolean status = Machine.interrupt().disable();
 		ThreadedKernel.scheduler.setPriority(t1, 5);
-		ThreadedKernel.scheduler.setPriority(t2, 4);
+		ThreadedKernel.scheduler.setPriority(t2, 2);
 		Machine.interrupt().restore(status);
 		// 认为main线程是T3，开始运行
 		resource.acquire();
@@ -177,11 +175,11 @@ public class PriorityScheduler extends Scheduler {
 
 		public KThread nextThread() {
 			Lib.assertTrue(Machine.interrupt().disabled());
-			
+
 			if (resourceHolder != null) { // 当资源被释放，下一个线程开始执行时，如果当前资源持有者不为null
 				ThreadState ts = getThreadState(resourceHolder);
-				//如果maxEffectivePriorityTS为资源持有者，那么它的线程应该不在等待队列中
-				//所以在这里把maxEffectivePriorityTS设为空
+				// 如果maxEffectivePriorityTS为资源持有者，那么它的线程应该不在等待队列中
+				// 所以在这里把maxEffectivePriorityTS设为空
 				if (maxEffectivePriorityTS == ts)
 					maxEffectivePriorityTS = null;
 				ts.gottenResources.remove(this); // 从resourceHolder持有资源的队列中删除当前队列
@@ -192,11 +190,12 @@ public class PriorityScheduler extends Scheduler {
 				return null;
 
 			KThread next = pickNextThread();
-			if(!waitQueue.remove(next)) {
+			if (!waitQueue.remove(next)) {
 				maxEffectivePriorityTS = null;
 				next = pickNextThread();
 				waitQueue.remove(next);
 			}
+			getThreadState(next).acquire(this);
 			return next;
 		}
 
@@ -212,7 +211,7 @@ public class PriorityScheduler extends Scheduler {
 
 			if (transferPriority && maxEffectivePriorityTS != null)
 				return maxEffectivePriorityTS.thread;
-			
+
 			KThread next = waitQueue.getFirst(); // 先得到等待队列中的第一个线程
 			for (KThread t : waitQueue) {
 				ThreadState ts = getThreadState(t);
@@ -239,8 +238,8 @@ public class PriorityScheduler extends Scheduler {
 		 * threads to the owning thread.
 		 */
 		public boolean transferPriority;
-		private LinkedList<KThread> waitQueue = new LinkedList<>();
-		private KThread resourceHolder = null;
+		protected LinkedList<KThread> waitQueue = new LinkedList<>();
+		protected KThread resourceHolder = null;
 		private ThreadState maxEffectivePriorityTS = null;
 	}
 
@@ -304,12 +303,12 @@ public class PriorityScheduler extends Scheduler {
 			// 当新的实际优先级大于原来的实际优先级时，将自己的实际优先级设置为它，并检查所有自己正在等待的资源，把优先级捐献给它们
 			if (effectivePriority > this.effectivePriority) {
 				this.effectivePriority = effectivePriority;
-				for (PriorityQueue q : waitingResources) {
-					if (q.resourceHolder != null
-							&& getThreadState(q.resourceHolder).getEffectivePriority() < effectivePriority) {
-						q.maxEffectivePriorityTS = this; //自己要对q进行捐献
-						getThreadState(q.resourceHolder).setEffectivePriority(effectivePriority);
-					}
+				if (waitingResource == null)
+					return;
+				if (waitingResource.resourceHolder != null
+						&& getThreadState(waitingResource.resourceHolder).getEffectivePriority() < effectivePriority) {
+					waitingResource.maxEffectivePriorityTS = this; // 自己要对q进行捐献
+					getThreadState(waitingResource.resourceHolder).setEffectivePriority(effectivePriority);
 				}
 			} else if (effectivePriority == this.effectivePriority) {// 当新的实际优先级等于原来的时，不用进行操作
 				return;
@@ -323,16 +322,14 @@ public class PriorityScheduler extends Scheduler {
 					return;
 				int preEffectivePriority = this.effectivePriority;
 				this.effectivePriority = effectivePriority;
-				for (PriorityQueue q : waitingResources) {
-					// 把当前线程所等待资源的队列的集合中的实际优先级与原来的effectivePriority相等的筛选出来
-					// 并去除resourceHolder为空的队列
-					// 目的是找出最高实际优先级时由当前的线程所捐献的队列，对它进行运算
-					if (q.resourceHolder != null
-							&& getThreadState(q.resourceHolder).getEffectivePriority() == preEffectivePriority)
-						getThreadState(q.resourceHolder).setEffectivePriority(effectivePriority);
-					if (q.maxEffectivePriorityTS == this)
-						q.maxEffectivePriorityTS = null; //有最大实际优先级的线程失效了
-				}
+				if (waitingResource == null)
+					return;
+				// 如果当前所等待的资源的优先级队列的优先级是由当前线程提供的，重新计算优先级
+				if (waitingResource.resourceHolder != null && getThreadState(waitingResource.resourceHolder)
+						.getEffectivePriority() == preEffectivePriority)
+					getThreadState(waitingResource.resourceHolder).setEffectivePriority(effectivePriority);
+				if (waitingResource.maxEffectivePriorityTS == this)
+					waitingResource.maxEffectivePriorityTS = null; // 有最大实际优先级的线程失效了
 			}
 		}
 
@@ -354,10 +351,10 @@ public class PriorityScheduler extends Scheduler {
 			// 存在持有本队列资源的进程
 			if (waitQueue.resourceHolder != null) {
 				if (getThreadState(waitQueue.resourceHolder).getEffectivePriority() < effectivePriority) {
-					waitQueue.maxEffectivePriorityTS = this; //自己要对waitQueue进行捐献
+					waitQueue.maxEffectivePriorityTS = this; // 自己要对waitQueue进行捐献
 					getThreadState(waitQueue.resourceHolder).setEffectivePriority(effectivePriority);
 				}
-				waitingResources.add(waitQueue);
+				waitingResource = waitQueue;
 			}
 		}
 
@@ -374,11 +371,10 @@ public class PriorityScheduler extends Scheduler {
 		public void acquire(PriorityQueue waitQueue) {
 			Lib.assertTrue(Machine.interrupt().disabled());
 
-			Lib.assertTrue(waitQueue.waitQueue.isEmpty()); // 断言当前等待队列为空
-			Lib.assertTrue(waitQueue.resourceHolder == null); // 当前没有资源持有者
 			waitQueue.resourceHolder = thread; // 确认当前线程为资源持有者
-			waitQueue.maxEffectivePriorityTS = this; //让自己成为有最大实际优先级的进程
-			waitingResources.remove(waitQueue); // 得到了资源，从表示正在等待的资源的集合中删除该资源
+			waitQueue.maxEffectivePriorityTS = this; // 让自己成为有最大实际优先级的进程
+			if (this.waitingResource == waitQueue) // 得到了资源，当前不在等待资源
+				this.waitingResource = null;
 			gottenResources.add(waitQueue); // 当前线程得到了该队列的资源，保存该队列的引用
 		}
 
@@ -388,9 +384,9 @@ public class PriorityScheduler extends Scheduler {
 		protected int priority;
 		/** The effective priority of the associated thread, used for cache. */
 		protected int effectivePriority;
-		/** The queues whose resources hold by this thread. */
-		private HashSet<PriorityQueue> gottenResources = new HashSet<>();
-		/** The queues whose resources wait by this thread. */
-		private HashSet<PriorityQueue> waitingResources = new HashSet<>();
+		/** The queues whose resources are hold by this thread. */
+		protected LinkedList<PriorityQueue> gottenResources = new LinkedList<>();
+		/** The queue whose resource is wanted by this thread. */
+		protected PriorityQueue waitingResource = null;
 	}
 }
