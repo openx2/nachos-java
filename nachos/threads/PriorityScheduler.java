@@ -190,11 +190,9 @@ public class PriorityScheduler extends Scheduler {
 				return null;
 
 			KThread next = pickNextThread();
-			if (!waitQueue.remove(next)) {
+			if (getThreadState(next) == maxEffectivePriorityTS) //如果最大优先级进程出队列了，那么缓存就失效了
 				maxEffectivePriorityTS = null;
-				next = pickNextThread();
-				waitQueue.remove(next);
-			}
+			waitQueue.remove(next);
 			getThreadState(next).acquire(this);
 			return next;
 		}

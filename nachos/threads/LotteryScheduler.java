@@ -93,10 +93,12 @@ public class LotteryScheduler extends PriorityScheduler {
 			public void run() {
 				for (int i = 0; i < 100; i++) {
 					KThread.yield();
-					boolean intStatus = Machine.interrupt().disable();
-					System.out.println("I'm T1. I have " + scheduler.getPriority() + " tickets.");
-					testCount++;
-					Machine.interrupt().restore(intStatus);
+					if (testCount < 100) {
+						boolean intStatus = Machine.interrupt().disable();
+						System.out.println("I'm T1. I have " + scheduler.getPriority() + " tickets.");
+						testCount++;
+						Machine.interrupt().restore(intStatus);
+					}
 				}
 			}
 		};
@@ -105,10 +107,12 @@ public class LotteryScheduler extends PriorityScheduler {
 			public void run() {
 				for (int i = 0; i < 100; i++) {
 					KThread.yield();
-					boolean intStatus = Machine.interrupt().disable();
-					System.out.println("I'm T2. I have " + scheduler.getPriority() + " tickets.");
-					testCount++;
-					Machine.interrupt().restore(intStatus);
+					if (testCount < 100) {
+						boolean intStatus = Machine.interrupt().disable();
+						System.out.println("I'm T2. I have " + scheduler.getPriority() + " tickets.");
+						testCount++;
+						Machine.interrupt().restore(intStatus);
+					}
 				}
 			}
 		};
@@ -117,10 +121,12 @@ public class LotteryScheduler extends PriorityScheduler {
 			public void run() {
 				for (int i = 0; i < 100; i++) {
 					KThread.yield();
-					boolean intStatus = Machine.interrupt().disable();
-					System.out.println("I'm T3. I have " + scheduler.getPriority() + " tickets.");
-					testCount++;
-					Machine.interrupt().restore(intStatus);
+					if (testCount < 100) {
+						boolean intStatus = Machine.interrupt().disable();
+						System.out.println("I'm T3. I have " + scheduler.getPriority() + " tickets.");
+						testCount++;
+						Machine.interrupt().restore(intStatus);
+					}
 				}
 			}
 		};
@@ -135,9 +141,6 @@ public class LotteryScheduler extends PriorityScheduler {
 		t1.fork();
 		t2.fork();
 		t3.fork();
-		while (testCount < 100) {
-			ThreadedKernel.alarm.waitUntil(100);
-		}
 	}
 
 	// now priority means the number of tickets belong to a thread
@@ -231,7 +234,7 @@ public class LotteryScheduler extends PriorityScheduler {
 				((LotteryQueue) waitingResource).effectiveTotalTicketNum += ticketChange;
 				if (waitingResource.resourceHolder != null) {
 					ThreadState ts = getThreadState(waitingResource.resourceHolder);
-					if (ts.waitingResource == null || this.thread != ts.waitingResource.resourceHolder) //·ÀÖ¹ÖØ¸´µÝ¹é£¡
+					if (ts.waitingResource == null || this.thread != ts.waitingResource.resourceHolder) // ·ÀÖ¹ÖØ¸´µÝ¹é£¡
 						ts.setEffectivePriority(ticketChange);
 				}
 			}
